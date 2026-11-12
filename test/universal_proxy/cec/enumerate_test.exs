@@ -95,4 +95,83 @@ defmodule UniversalProxy.Cec.EnumerateTest do
     assert %{card_index: nil, hdmi_device: "fef00700.hdmi"} =
              Enumerate.list(opts)[Path.join(dev, "cec0")]
   end
+
+  # What cec-core actually produces (a Pi 4 on the 6.18 kernel): adapters are
+  # bus devices, so `/sys/bus/cec/devices/cecN` is a symlink to the adapter
+  # directory under the HDMI device and has no `device` link of its own; the
+  # HDMI node is the parent of the resolved entry. Sound cards are class
+  # entries as above.
+  describe "bus layout (/sys/bus/cec/devices)" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "cec_bus_#{System.unique_integer([:positive])}")
+      soc = Path.join(root, "sys/devices/platform/soc")
+      bus = Path.join(root, "sys/bus/cec/devices")
+      sound = Path.join(root, "sys/class/sound")
+      dev = Path.join(root, "dev")
+
+      for d <- [bus, sound, dev], do: File.mkdir_p!(d)
+
+      adapter = fn device_path, name ->
+        File.mkdir_p!(Path.join([soc, device_path, name]))
+        File.ln_s!("../../../devices/platform/soc/#{device_path}/#{name}", Path.join(bus, name))
+      end
+
+      card = fn device_path, name ->
+        real = Path.join([soc, device_path, "sound", name])
+        File.mkdir_p!(real)
+        File.ln_s!("../../../#{Path.basename(device_path)}", Path.join(real, "device"))
+
+        File.ln_s!(
+          "../../devices/platform/soc/#{device_path}/sound/#{name}",
+          Path.join(sound, name)
+        )
+      end
+
+      adapter.("fef00700.hdmi", "cec0")
+      adapter.("fef05700.hdmi", "cec1")
+      card.("fe00b840.mailbox/bcm2835-audio", "card0")
+      card.("fef00700.hdmi", "card1")
+      card.("fef05700.hdmi", "card2")
+      File.touch!(Path.join(dev, "cec0"))
+      File.touch!(Path.join(dev, "cec1"))
+
+      on_exit(fn -> File.rm_rf!(root) end)
+      {:ok, opts: [sys_root: bus, sound_sys_root: sound, dev_root: dev], dev: dev}
+    end
+
+    test "pairs each adapter with its HDMI card through the resolved entry", %{
+      opts: opts,
+      dev: dev
+    } do
+      assert Enumerate.list(opts) == %{
+               Path.join(dev, "cec0") => %{
+                 dev: Path.join(dev, "cec0"),
+                 index: 0,
+                 hdmi_device: "fef00700.hdmi",
+                 card_index: 1
+               },
+               Path.join(dev, "cec1") => %{
+                 dev: Path.join(dev, "cec1"),
+                 index: 1,
+                 hdmi_device: "fef05700.hdmi",
+                 card_index: 2
+               }
+             }
+    end
+
+    test "an entry that is neither a symlink nor has a device link stays unpaired", %{
+      opts: opts,
+      dev: dev
+    } do
+      File.mkdir_p!(Path.join(opts[:sys_root], "cec2"))
+      File.touch!(Path.join(dev, "cec2"))
+
+      assert %{hdmi_device: nil, card_index: nil} =
+               Enumerate.list(opts)[Path.join(dev, "cec2")]
+    end
+  end
+
+  test "the default root prefers the bus layout, falling back to the class path" do
+    assert Enumerate.default_sys_root() in ["/sys/bus/cec/devices", "/sys/class/cec"]
+  end
 end

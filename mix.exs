@@ -160,6 +160,11 @@ defmodule UniversalProxy.MixProject do
       # Already transitive via bluez/vintage_net; direct dep since Storage.Smbd uses MuonTrap.Daemon directly.
       {:muontrap, "~> 2.0"},
 
+      # HDMI-CEC through the kernel's /dev/cecN ioctls (a NIF): what
+      # `UniversalProxy.Cec` drives the adapters with, replacing the cec-ctl
+      # shelling. A path dep until the library is published.
+      {:bodge_cec, path: "../bodge_cec"},
+
       # Improv-over-BLE Wi-Fi provisioning, extracted from this app into
       # bbangert/improv (same lineage as bluez above) and published as
       # hex improv 0.1.0 after HW validation on the interim git pin.

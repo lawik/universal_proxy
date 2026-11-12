@@ -4,11 +4,18 @@ defmodule UniversalProxy.Cec.Enumerate do
   card of the same HDMI port.
 
   The vc4 driver registers both the CEC adapter and the HDMI ALSA card on the
-  HDMI port's platform device, so `/sys/class/cec/cecN/device` and
-  `/sys/class/sound/cardM/device` resolve to the same node (e.g.
-  `fef00700.hdmi` for HDMI0 on a Pi 4). That shared node is the pairing key;
-  the resulting `card_index` lines up with `UniversalProxy.Audio.Enumerate`'s
-  `:card_index` so a Sendspin output can be mapped to its CEC adapter.
+  HDMI port's platform device (e.g. `fef00700.hdmi` for HDMI0 on a Pi 4).
+  That shared node is the pairing key; the resulting `card_index` lines up
+  with `UniversalProxy.Audio.Enumerate`'s `:card_index` so a Sendspin output
+  can be mapped to its CEC adapter.
+
+  cec-core registers adapters on a bus, not a class, so what a kernel has is
+  `/sys/bus/cec/devices/cecN`: a symlink straight to the adapter directory
+  under the HDMI device, with no `device` link of its own — the HDMI node is
+  the parent of the resolved entry. `/sys/class/cec/cecN` entries with a
+  `device` link to the HDMI node are handled as well, and `/sys/class/cec`
+  stays the fallback root. Sound cards are class entries whose `device` link
+  resolves to the same HDMI node.
 
   Roots are overridable (`:sys_root`, `:sound_sys_root`, `:dev_root`) for
   host-side tests. Never raises: any failure yields `%{}`.
@@ -26,10 +33,13 @@ defmodule UniversalProxy.Cec.Enumerate do
   @cec_re ~r/^cec(\d+)$/
   @card_re ~r/^card(\d+)$/
 
+  # The bus is what cec-core creates; the class path is only a fallback.
+  @default_sys_roots ["/sys/bus/cec/devices", "/sys/class/cec"]
+
   @doc "Adapters keyed by device path, e.g. `%{\"/dev/cec0\" => %{...}}`."
   @spec list(keyword()) :: %{String.t() => adapter()}
   def list(opts \\ []) do
-    sys_root = Keyword.get(opts, :sys_root, "/sys/class/cec")
+    sys_root = Keyword.get_lazy(opts, :sys_root, &default_sys_root/0)
     sound_root = Keyword.get(opts, :sound_sys_root, "/sys/class/sound")
     dev_root = Keyword.get(opts, :dev_root, "/dev")
 
@@ -41,7 +51,7 @@ defmodule UniversalProxy.Cec.Enumerate do
       dev = Path.join(dev_root, name)
 
       if File.exists?(dev) do
-        node = device_node(Path.join(sys_root, name))
+        node = adapter_parent(Path.join(sys_root, name))
 
         Map.put(acc, dev, %{
           dev: dev,
@@ -57,6 +67,12 @@ defmodule UniversalProxy.Cec.Enumerate do
     e ->
       Logger.warning("CEC enumerate failed: #{Exception.format(:error, e, __STACKTRACE__)}")
       %{}
+  end
+
+  @doc false
+  @spec default_sys_root() :: String.t()
+  def default_sys_root do
+    Enum.find(@default_sys_roots, &File.dir?/1) || hd(@default_sys_roots)
   end
 
   defp cards_by_device(sound_root) do
@@ -82,6 +98,24 @@ defmodule UniversalProxy.Cec.Enumerate do
 
       _ ->
         []
+    end
+  end
+
+  # The HDMI platform device an adapter entry belongs to. A class-style entry
+  # says so through its `device` link; a bus entry is a symlink to the adapter
+  # directory itself, whose parent is the HDMI device. An entry that is
+  # neither tells us nothing.
+  defp adapter_parent(entry) do
+    case device_node(entry) do
+      nil ->
+        with {:ok, _} <- File.read_link(entry), real when is_binary(real) <- realpath(entry) do
+          Path.dirname(real)
+        else
+          _ -> nil
+        end
+
+      node ->
+        node
     end
   end
 

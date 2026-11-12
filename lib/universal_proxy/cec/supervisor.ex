@@ -1,14 +1,15 @@
 defmodule UniversalProxy.Cec.Supervisor do
   @moduledoc """
-  HDMI-CEC subtree: a `Registry` naming the per-adapter `cec-ctl -m`
-  monitors by device path, the `DynamicSupervisor` running them, and the
+  HDMI-CEC subtree: a `Registry` naming the per-adapter `BodgeCEC` processes
+  by device path, the `DynamicSupervisor` running them, and the
   `UniversalProxy.Cec.Server` inventory.
 
-  `:one_for_all` so a Server restart also restarts its monitors and their
-  registry, re-creating them from a clean slate (it re-discovers adapters on
-  init) instead of leaving orphans the new Server doesn't know about. Returns `:ignore` unless the
-  `UniversalProxy.Cec` env has `enabled: true` (set for targets, off on
-  host/test), so a dev machine never spawns cec-ctl.
+  `:one_for_all` so a Server restart also restarts the adapter processes and
+  their registry, re-creating them from a clean slate (it re-discovers
+  adapters on init) instead of leaving orphans the new Server doesn't know
+  about. Returns `:ignore` unless the `UniversalProxy.Cec` env has
+  `enabled: true` (set for targets, off on host/test), so a dev machine
+  never opens `/dev/cecN`.
   """
 
   use Supervisor
@@ -32,8 +33,8 @@ defmodule UniversalProxy.Cec.Supervisor do
   @impl true
   def init(opts) do
     children = [
-      {Registry, keys: :unique, name: UniversalProxy.Cec.MonitorRegistry},
-      {DynamicSupervisor, name: UniversalProxy.Cec.MonitorSupervisor, strategy: :one_for_one},
+      {Registry, keys: :unique, name: UniversalProxy.Cec.AdapterRegistry},
+      {DynamicSupervisor, name: UniversalProxy.Cec.AdapterSupervisor, strategy: :one_for_one},
       {UniversalProxy.Cec.Server, opts}
     ]
 

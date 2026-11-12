@@ -1,17 +1,28 @@
 defmodule UniversalProxy.Cec.ServerTest do
-  # async: false — FakeCtl reports to a pid held in application env.
+  # async: false — FakeAdapter reports to a pid held in application env, and
+  # the adapter registry/supervisor carry their production names.
   use ExUnit.Case, async: false
 
   alias UniversalProxy.Cec
-  alias UniversalProxy.Cec.{FakeCtl, Monitor, Server}
+  alias UniversalProxy.Cec.{FakeAdapter, Server}
 
   @pubsub UniversalProxy.PubSub
   @dev "/dev/cec0"
   @output_key {"vc4-hdmi", nil, nil}
+  @registry UniversalProxy.Cec.AdapterRegistry
+  @adapter_sup UniversalProxy.Cec.AdapterSupervisor
+  @claim [claim: [type: :playback, osd_name: "UniversalProxy"]]
 
   setup do
-    Application.put_env(:universal_proxy, :cec_fake_ctl_pid, self())
-    on_exit(fn -> Application.delete_env(:universal_proxy, :cec_fake_ctl_pid) end)
+    Application.put_env(:universal_proxy, :cec_fake_pid, self())
+
+    on_exit(fn ->
+      for key <- [:cec_fake_pid, :cec_fake_replies, :cec_fake_start_error],
+          do: Application.delete_env(:universal_proxy, key)
+    end)
+
+    start_supervised!({Registry, keys: :unique, name: @registry})
+    start_supervised!({DynamicSupervisor, name: @adapter_sup, strategy: :one_for_one})
 
     {:ok, agent} =
       Agent.start_link(fn ->
@@ -24,13 +35,12 @@ defmodule UniversalProxy.Cec.ServerTest do
       start_supervised!(
         {Server,
          name: nil,
-         ctl_module: FakeCtl,
+         cec_module: FakeAdapter,
          enumerate: fn -> Agent.get(agent, & &1) end,
          output_lookup: fn
            @output_key -> {:ok, %{card_index: 1}}
            _ -> :error
          end,
-         monitor?: false,
          scan_interval_ms: 60_000,
          task_supervisor: task_sup}
       )
@@ -38,19 +48,30 @@ defmodule UniversalProxy.Cec.ServerTest do
     {:ok, server: server, agent: agent}
   end
 
-  test "claims a playback address and reads the physical address on discovery", %{server: server} do
-    assert_receive {:cec_ctl, ["-d", @dev, "-s", "--playback", "--osd-name", "Universal Proxy"]}
-    assert_receive {:cec_ctl, ["-d", @dev]}
+  defp adapter_pid do
+    [{pid, _}] = Registry.lookup(@registry, @dev)
+    pid
+  end
+
+  defp event(server, event), do: send(server, {:bodge_cec, adapter_pid(), event})
+
+  test "opens an adapter per device, claiming playback, and reads its addresses", %{
+    server: server
+  } do
+    assert_receive {:cec_adapter, @dev, {:start, @claim}}
 
     assert [%{dev: @dev, card_index: 1, phys_addr: "1.0.0.0", logical_address: 4, claimed?: true}] =
              Server.list_adapters(server)
+
+    assert [{_pid, _}] = Registry.lookup(@registry, @dev)
+    assert [_] = DynamicSupervisor.which_children(@adapter_sup)
 
     assert {:ok, %{dev: @dev}} = Server.adapter_for_card(server, 1)
     assert :error = Server.adapter_for_card(server, 0)
   end
 
   test "a Sendspin stream_start on the paired output fires One Touch Play", %{server: server} do
-    assert_receive {:cec_ctl, [_, _, "-s", "--playback" | _]}
+    assert_receive {:cec_adapter, @dev, {:start, _}}
 
     Phoenix.PubSub.broadcast(
       @pubsub,
@@ -58,8 +79,8 @@ defmodule UniversalProxy.Cec.ServerTest do
       {:sendspin_state, @output_key, %{event: "stream_start"}}
     )
 
-    assert_receive {:cec_ctl, ["-d", @dev, "-s", "--to", "0", "--image-view-on"]}
-    assert_receive {:cec_ctl, ["-d", @dev, "-s", "--active-source", "phys-addr=1.0.0.0"]}
+    assert_receive {:cec_adapter, @dev, {:image_view_on, []}}
+    assert_receive {:cec_adapter, @dev, {:active_source, []}}
 
     # Unrelated outputs (a USB DAC) don't touch CEC.
     Phoenix.PubSub.broadcast(
@@ -68,176 +89,142 @@ defmodule UniversalProxy.Cec.ServerTest do
       {:sendspin_state, {"1-1.3", 1, 2}, %{event: "stream_start"}}
     )
 
-    refute_receive {:cec_ctl, [_, _, "-s", "--to", "0", "--image-view-on"]}, 100
+    refute_receive {:cec_adapter, @dev, {:image_view_on, []}}, 100
     assert Process.alive?(server)
   end
 
-  test "monitor records update what is known about the receiver", %{server: server} do
-    assert_receive {:cec_ctl, [_, _, "-s", "--playback" | _]}
+  test "adapter events update what is known about the link and the receiver, and are rebroadcast",
+       %{server: server} do
+    assert_receive {:cec_adapter, @dev, {:start, _}}
+    Phoenix.PubSub.subscribe(@pubsub, Server.topic())
 
-    Phoenix.PubSub.broadcast(
-      @pubsub,
-      Monitor.topic(),
-      {:cec_event, @dev,
-       %{
-         type: :message,
-         direction: :received,
-         from: 5,
-         to: 4,
-         opcode: "REPORT_AUDIO_STATUS",
-         code: 0x7A,
-         args: %{
-           "aud-mute-status" => %{text: "Off", value: 0},
-           "aud-vol-status" => %{text: "33", value: 33}
-         }
-       }}
-    )
-
-    Phoenix.PubSub.broadcast(
-      @pubsub,
-      Monitor.topic(),
-      {:cec_event, @dev,
-       %{
-         type: :message,
-         direction: :received,
-         from: 0,
-         to: :all,
-         opcode: "STANDBY",
-         code: 0x36,
-         args: %{}
-       }}
-    )
-
-    Phoenix.PubSub.broadcast(
-      @pubsub,
-      Monitor.topic(),
-      {:cec_event, @dev, %{type: :event, kind: :state_change, phys_addr: "f.f.f.f", la_mask: 0}}
-    )
+    event(server, {:message, 5, 4, {:report_audio_status, false, 33}})
+    event(server, {:message, 0, 15, :standby})
+    event(server, {:state_change, %{phys_addr: 0xFFFF, log_addrs: []}})
 
     assert {:ok,
             %{
               phys_addr: "f.f.f.f",
+              logical_address: nil,
+              claimed?: false,
               receiver: %{power: :standby, volume: 33, muted: false, updated_at: %DateTime{}}
-            }} =
-             Server.get_adapter(server, @dev)
+            }} = Server.get_adapter(server, @dev)
+
+    assert_receive {:cec_event, @dev, {:message, 5, 4, {:report_audio_status, false, 33}}}
+    assert_receive {:cec_event, @dev, {:state_change, %{phys_addr: 0xFFFF}}}
   end
 
   test "status reports from devices other than the receiver are ignored", %{server: server} do
-    assert_receive {:cec_ctl, [_, _, "-s", "--playback" | _]}
+    assert_receive {:cec_adapter, @dev, {:start, _}}
 
-    report = fn from, opcode, args ->
-      Phoenix.PubSub.broadcast(
-        @pubsub,
-        Monitor.topic(),
-        {:cec_event, @dev,
-         %{type: :message, direction: :received, from: from, to: 4, opcode: opcode, args: args}}
-      )
-    end
-
-    report.(5, "REPORT_POWER_STATUS", %{"pwr-state" => %{text: "On", value: 0}})
+    event(server, {:message, 5, 4, {:report_power_status, :on}})
     # The TV (0) answering its own power query, and a directed Standby from it.
-    report.(0, "REPORT_POWER_STATUS", %{"pwr-state" => %{text: "Standby", value: 1}})
-
-    report.(0, "REPORT_AUDIO_STATUS", %{
-      "aud-mute-status" => %{text: "On", value: 1},
-      "aud-vol-status" => %{text: "80", value: 80}
-    })
-
-    report.(0, "STANDBY", %{})
+    event(server, {:message, 0, 4, {:report_power_status, :standby}})
+    event(server, {:message, 0, 4, {:report_audio_status, true, 80}})
+    event(server, {:message, 0, 4, :standby})
 
     assert {:ok, %{receiver: %{power: :on, volume: nil, muted: nil}}} =
              Server.get_adapter(server, @dev)
 
-    report.(5, "STANDBY", %{})
+    event(server, {:message, 5, 4, :standby})
     assert {:ok, %{receiver: %{power: :standby}}} = Server.get_adapter(server, @dev)
   end
 
-  test "an unplugged adapter is dropped on the next scan", %{server: server, agent: agent} do
-    assert_receive {:cec_ctl, [_, _, "-s", "--playback" | _]}
+  test "an unplugged adapter is dropped on the next scan and its process stopped", %{
+    server: server,
+    agent: agent
+  } do
+    assert_receive {:cec_adapter, @dev, {:start, _}}
+    pid = adapter_pid()
+
+    unplugged = Agent.get(agent, & &1)
     Agent.update(agent, fn _ -> %{} end)
     :ok = Server.rescan(server)
+
     assert Server.list_adapters(server) == []
+    assert DynamicSupervisor.which_children(@adapter_sup) == []
+    refute Process.alive?(pid)
+
+    Agent.update(agent, fn _ -> unplugged end)
+    :ok = Server.rescan(server)
+
+    assert [{:undefined, new_pid, :worker, _}] = DynamicSupervisor.which_children(@adapter_sup)
+    assert [{^new_pid, _}] = Registry.lookup(@registry, @dev)
+    assert [%{dev: @dev, claimed?: true}] = Server.list_adapters(server)
   end
 
-  describe "adapter monitors" do
-    setup %{agent: agent} do
-      start_supervised!({Registry, keys: :unique, name: UniversalProxy.Cec.MonitorRegistry})
+  @tag :capture_log
+  test "a restarted adapter process is still the one stopped on unplug", %{
+    server: server,
+    agent: agent
+  } do
+    assert_receive {:cec_adapter, @dev, {:start, _}}
+    original = adapter_pid()
+    ref = Process.monitor(original)
+    Process.exit(original, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^original, :killed}
 
+    replacement = wait_for_adapter(original)
+    assert replacement != original
+
+    Agent.update(agent, fn _ -> %{} end)
+    :ok = Server.rescan(server)
+
+    assert DynamicSupervisor.which_children(@adapter_sup) == []
+    refute Process.alive?(replacement)
+  end
+
+  @tag :capture_log
+  test "an adapter that cannot be opened is listed unclaimed and retried on the next scan", %{
+    agent: agent
+  } do
+    Application.put_env(:universal_proxy, :cec_fake_start_error, :enotsup)
+
+    {:ok, task_sup} = Task.Supervisor.start_link()
+
+    server =
       start_supervised!(
-        {DynamicSupervisor, name: UniversalProxy.Cec.MonitorSupervisor, strategy: :one_for_one}
+        {Server,
+         name: nil,
+         cec_module: FakeAdapter,
+         enumerate: fn -> Agent.get(agent, & &1) end,
+         output_lookup: fn _ -> :error end,
+         scan_interval_ms: 60_000,
+         task_supervisor: task_sup},
+        id: :failing_server
       )
 
-      # Stand-in for `cec-ctl -m`: silent, ignores stdin, runs until killed.
-      dir = Path.join(System.tmp_dir!(), "cec_mon_#{System.unique_integer([:positive])}")
-      File.mkdir_p!(dir)
-      binary = Path.join(dir, "cec-ctl")
-      File.write!(binary, "#!/bin/sh\nwhile :; do sleep 1; done\n")
-      File.chmod!(binary, 0o755)
-      on_exit(fn -> File.rm_rf!(dir) end)
+    # The outer setup's server already opened the adapter; make this one
+    # start from nothing.
+    for {pid, _} <- Registry.lookup(@registry, @dev),
+        do: DynamicSupervisor.terminate_child(@adapter_sup, pid)
 
-      server =
-        start_supervised!(
-          {Server,
-           name: nil,
-           ctl_module: FakeCtl,
-           enumerate: fn -> Agent.get(agent, & &1) end,
-           output_lookup: fn _ -> :error end,
-           monitor_binary: binary,
-           scan_interval_ms: 60_000},
-          id: :monitored_server
-        )
+    :ok = Server.rescan(server)
+    assert [%{dev: @dev, claimed?: false, phys_addr: nil}] = Server.list_adapters(server)
+    assert DynamicSupervisor.which_children(@adapter_sup) == []
 
-      :ok = Server.rescan(server)
-      {:ok, server: server}
-    end
-
-    @tag :capture_log
-    test "a restarted monitor is still stopped on unplug, and replug starts exactly one", %{
-      server: server,
-      agent: agent
-    } do
-      [{original, _}] = Registry.lookup(UniversalProxy.Cec.MonitorRegistry, @dev)
-      ref = Process.monitor(original)
-      Process.exit(original, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^original, :killed}
-
-      replacement = wait_for_monitor(original)
-      assert replacement != original
-
-      unplugged = Agent.get(agent, & &1)
-      Agent.update(agent, fn _ -> %{} end)
-      :ok = Server.rescan(server)
-
-      assert DynamicSupervisor.which_children(UniversalProxy.Cec.MonitorSupervisor) == []
-      refute Process.alive?(replacement)
-
-      Agent.update(agent, fn _ -> unplugged end)
-      :ok = Server.rescan(server)
-
-      assert [{:undefined, pid, :worker, _}] =
-               DynamicSupervisor.which_children(UniversalProxy.Cec.MonitorSupervisor)
-
-      assert [{^pid, _}] = Registry.lookup(UniversalProxy.Cec.MonitorRegistry, @dev)
-    end
+    Application.delete_env(:universal_proxy, :cec_fake_start_error)
+    :ok = Server.rescan(server)
+    assert [%{dev: @dev, claimed?: true, phys_addr: "1.0.0.0"}] = Server.list_adapters(server)
   end
 
-  defp wait_for_monitor(old, attempts \\ 50) do
-    case Registry.lookup(UniversalProxy.Cec.MonitorRegistry, @dev) do
+  defp wait_for_adapter(old, attempts \\ 50) do
+    case Registry.lookup(@registry, @dev) do
       [{pid, _}] when pid != old ->
         pid
 
       _ when attempts > 0 ->
         Process.sleep(10)
-        wait_for_monitor(old, attempts - 1)
+        wait_for_adapter(old, attempts - 1)
 
       other ->
-        flunk("monitor for #{@dev} not restarted: #{inspect(other)}")
+        flunk("adapter for #{@dev} not restarted: #{inspect(other)}")
     end
   end
 
   describe "facade commands against an explicit adapter" do
     setup %{server: server} do
-      assert_receive {:cec_ctl, [_, _, "-s", "--playback" | _]}
+      assert_receive {:cec_adapter, @dev, {:start, _}}
       {:ok, adapter} = Server.get_adapter(server, @dev)
       {:ok, adapter: adapter}
     end
@@ -245,39 +232,42 @@ defmodule UniversalProxy.Cec.ServerTest do
     test "one_touch_play skips Active Source without a valid physical address", %{
       adapter: adapter
     } do
-      assert :ok = Cec.one_touch_play(%{adapter | phys_addr: "f.f.f.f"}, ctl: FakeCtl)
-      assert_receive {:cec_ctl, [_, _, "-s", "--to", "0", "--image-view-on"]}
-      refute_receive {:cec_ctl, [_, _, "-s", "--active-source" | _]}, 50
+      assert :ok = Cec.one_touch_play(%{adapter | phys_addr: "f.f.f.f"}, cec: FakeAdapter)
+      assert_receive {:cec_adapter, @dev, {:image_view_on, []}}
+      refute_receive {:cec_adapter, @dev, {:active_source, []}}, 50
     end
 
-    test "user controls send press and release to the receiver address", %{adapter: adapter} do
-      assert :ok = Cec.user_control(adapter, :volume_up, ctl: FakeCtl, receiver_la: 5)
+    test "a refused Active Source is reported as such", %{adapter: adapter} do
+      Application.put_env(:universal_proxy, :cec_fake_replies, %{
+        active_source: {:error, :not_configured}
+      })
 
-      assert_receive {:cec_ctl,
-                      [
-                        "-d",
-                        @dev,
-                        "-s",
-                        "--to",
-                        "5",
-                        "--user-control-pressed",
-                        "ui-cmd=0x41",
-                        "--user-control-released"
-                      ]}
+      assert {:error, {:active_source, :not_configured}} =
+               Cec.one_touch_play(adapter, cec: FakeAdapter)
+    end
+
+    test "user controls go to the receiver address in BodgeCEC's key names", %{
+      adapter: adapter
+    } do
+      assert :ok = Cec.user_control(adapter, :volume_up, cec: FakeAdapter, receiver_la: 5)
+      assert_receive {:cec_adapter, @dev, {:user_control, [5, :volume_up]}}
+
+      assert :ok = Cec.user_control(adapter, :power_on, cec: FakeAdapter, receiver_la: 5)
+      assert_receive {:cec_adapter, @dev, {:user_control, [5, :power_on_function]}}
+
+      assert :ok = Cec.user_control(adapter, 0x44, cec: FakeAdapter, receiver_la: 0)
+      assert_receive {:cec_adapter, @dev, {:user_control, [0, 0x44]}}
     end
   end
 
-  describe "standby via the registered server" do
+  describe "commands via the registered server" do
     setup %{agent: agent} do
-      on_exit(fn -> Application.delete_env(:universal_proxy, :cec_fake_ctl_outputs) end)
-
       named =
         start_supervised!(
           {Server,
-           ctl_module: FakeCtl,
+           cec_module: FakeAdapter,
            enumerate: fn -> Agent.get(agent, & &1) end,
            output_lookup: fn _ -> :error end,
-           monitor?: false,
            scan_interval_ms: 60_000},
           id: :named_server
         )
@@ -287,33 +277,52 @@ defmodule UniversalProxy.Cec.ServerTest do
     end
 
     test "a delivered Standby marks the receiver as going to standby", %{named: named} do
-      assert :ok = Cec.standby(@dev, ctl: FakeCtl)
-      assert_receive {:cec_ctl, ["-d", @dev, "-s", "--to", "5", "--standby"]}
+      assert :ok = Cec.standby(@dev, cec: FakeAdapter)
+      assert_receive {:cec_adapter, @dev, {:standby, [5]}}
       assert {:ok, %{receiver: %{power: :to_standby}}} = Server.get_adapter(named, @dev)
     end
 
     test "a NACKed Standby is an error and leaves the receiver cache alone", %{named: named} do
-      Application.put_env(:universal_proxy, :cec_fake_ctl_outputs, %{
-        "--standby" => """
+      Application.put_env(:universal_proxy, :cec_fake_replies, %{standby: {:error, :nack}})
 
-        Transmit from Playback Device 1 to Audio System (4 to 5):
-        STANDBY (0x36)
-        \tSequence: 2 Tx Timestamp: 1234.000000s
-        \tTx, Not Acknowledged (4), Max Retries
-        """
-      })
-
-      assert {:error, {:transmit_failed, ["Tx, Not Acknowledged (4), Max Retries"], _out}} =
-               Cec.standby(@dev, ctl: FakeCtl)
+      assert {:error, :nack} = Cec.standby(@dev, cec: FakeAdapter)
 
       assert {:ok, %{receiver: %{power: :unknown, updated_at: nil}}} =
                Server.get_adapter(named, @dev)
+    end
+
+    test "status requests decode the reply and record it", %{named: named} do
+      assert {:ok, :standby} = Cec.power_status(@dev, cec: FakeAdapter)
+      assert_receive {:cec_adapter, @dev, {:give_device_power_status, [5]}}
+
+      assert {:ok, %{volume: 40, muted: false}} = Cec.audio_status(@dev, cec: FakeAdapter)
+      assert_receive {:cec_adapter, @dev, {:give_audio_status, [5]}}
+
+      assert {:ok, %{receiver: %{power: :standby, volume: 40, muted: false}}} =
+               Server.get_adapter(named, @dev)
+
+      # A receiver that won't say its volume, and a power byte we don't know.
+      Application.put_env(:universal_proxy, :cec_fake_replies, %{
+        give_audio_status: {:ok, %{muted: true, volume: :unknown}},
+        give_device_power_status: {:ok, 0x42}
+      })
+
+      assert {:ok, %{volume: nil, muted: true}} = Cec.audio_status(@dev, cec: FakeAdapter)
+      assert {:ok, :unknown} = Cec.power_status(@dev, cec: FakeAdapter)
+    end
+
+    test "a command to an adapter whose process is gone is an error, not an exit", %{
+      named: named
+    } do
+      {:ok, adapter} = Server.get_adapter(named, @dev)
+      DynamicSupervisor.terminate_child(@adapter_sup, adapter_pid())
+      assert {:error, :adapter_down} = Cec.standby(adapter, cec: FakeAdapter)
     end
   end
 
   test "facade degrades when the server is not running" do
     assert Cec.list_adapters() == []
     assert Cec.get_adapter(@dev) == :error
-    assert {:error, :cec_unavailable} = Cec.power_status(@dev, ctl: FakeCtl)
+    assert {:error, :cec_unavailable} = Cec.power_status(@dev, cec: FakeAdapter)
   end
 end

@@ -1,14 +1,20 @@
 defmodule UniversalProxy.Cec.Server do
   @moduledoc """
-  Owns the CEC adapter inventory: discovers `/dev/cecN`, claims a Playback
-  Device logical address on each, learns its physical address, runs a
-  `UniversalProxy.Cec.Monitor` per adapter, and tracks what is known about
+  Owns the CEC adapter inventory: discovers `/dev/cecN`, runs one `BodgeCEC`
+  process per adapter (which claims a Playback Device logical address on it
+  and answers the bus as a source device), and tracks what is known about
   the device on the other end of each HDMI link (the AV receiver at logical
   address 5, by default).
 
-  Commands themselves (`UniversalProxy.Cec.one_touch_play/1` and friends)
-  run in the *caller's* process with a short `get_adapter/2` lookup here, so
-  a slow receiver never blocks this server or the hotplug scan.
+  Adapter processes live under `UniversalProxy.Cec.AdapterSupervisor` and are
+  registered in `UniversalProxy.Cec.AdapterRegistry` by device path
+  (`adapter_name/1`), so commands (`UniversalProxy.Cec.one_touch_play/1` and
+  friends) reach them by name from the *caller's* process; this server is
+  only consulted for the adapter record. A slow receiver therefore never
+  blocks this server or the hotplug scan. Each adapter notifies this server
+  of its events (received messages, address changes; see `t:BodgeCEC.event/0`),
+  which keep the `receiver` state current and are rebroadcast on the
+  `"cec:events"` PubSub topic as `{:cec_event, dev, event}`.
 
   ## Auto-wake
 
@@ -19,26 +25,25 @@ defmodule UniversalProxy.Cec.Server do
   `auto_wake: false` in the `UniversalProxy.Cec` env.
 
   Dependencies are injectable through `start_link/1` opts so host tests run
-  without cec-ctl or sysfs: `:ctl_module`, `:enumerate` (a 0-arity fun),
-  `:output_lookup` (key -> `{:ok, %{card_index: n}}`), `:monitor?`,
-  `:monitor_binary` (cec-ctl stand-in for the monitors).
-
-  Monitors are registered in `UniversalProxy.Cec.MonitorRegistry` under their
-  adapter's device path, so a monitor the `DynamicSupervisor` restarted after
-  a crash is still the one found (and stopped) when its adapter goes away.
+  without a CEC adapter or sysfs: `:cec_module` (a `BodgeCEC` stand-in),
+  `:enumerate` (a 0-arity fun), `:output_lookup` (key -> `{:ok, %{card_index: n}}`).
   """
 
   use GenServer
 
   require Logger
 
-  alias UniversalProxy.Cec.{Ctl, Enumerate, Monitor, Parser}
+  alias BodgeCEC.PhysicalAddress
+  alias UniversalProxy.Cec.Enumerate
 
   @pubsub UniversalProxy.PubSub
   @audio_topic "sendspin:state"
+  @topic "cec:events"
   @default_scan_ms 10_000
-  @monitor_registry UniversalProxy.Cec.MonitorRegistry
-  @monitor_supervisor UniversalProxy.Cec.MonitorSupervisor
+  @registry UniversalProxy.Cec.AdapterRegistry
+  @adapter_supervisor UniversalProxy.Cec.AdapterSupervisor
+  # CEC's <Set OSD Name> carries at most 14 bytes.
+  @osd_name_max 14
 
   @type receiver :: %{
           power: :on | :standby | :to_on | :to_standby | :unknown,
@@ -59,15 +64,13 @@ defmodule UniversalProxy.Cec.Server do
         }
 
   defstruct adapters: %{},
-            ctl: Ctl,
+            cec: BodgeCEC,
             enumerate: nil,
             output_lookup: nil,
-            osd_name: "Universal Proxy",
+            osd_name: "UniversalProxy",
             auto_wake: true,
             receiver_la: 5,
             scan_ms: @default_scan_ms,
-            monitor?: true,
-            monitor_binary: nil,
             pubsub: @pubsub,
             task_sup: UniversalProxy.TaskSupervisor
 
@@ -90,7 +93,7 @@ defmodule UniversalProxy.Cec.Server do
   def adapter_for_card(server \\ __MODULE__, card_index),
     do: GenServer.call(server, {:adapter_for_card, card_index})
 
-  @doc "Record something learned about the far end (from a one-shot reply)."
+  @doc "Record something learned about the far end (from a request's reply)."
   @spec note_receiver(GenServer.server(), String.t(), map()) :: :ok
   def note_receiver(server \\ __MODULE__, dev, partial) when is_map(partial),
     do: GenServer.cast(server, {:note_receiver, dev, partial})
@@ -103,6 +106,17 @@ defmodule UniversalProxy.Cec.Server do
   @spec receiver_la(GenServer.server()) :: 0..15
   def receiver_la(server \\ __MODULE__), do: GenServer.call(server, :receiver_la)
 
+  @doc """
+  Registered name of the adapter process for a device path: what the
+  `BodgeCEC` functions take as their adapter argument.
+  """
+  @spec adapter_name(String.t()) :: GenServer.name()
+  def adapter_name(dev) when is_binary(dev), do: {:via, Registry, {@registry, dev}}
+
+  @doc "PubSub topic adapter events are rebroadcast on, as `{:cec_event, dev, event}`."
+  @spec topic() :: String.t()
+  def topic, do: @topic
+
   # ── GenServer ─────────────────────────────────────────────────────────
 
   @impl true
@@ -111,21 +125,18 @@ defmodule UniversalProxy.Cec.Server do
     get = fn key, default -> Keyword.get(opts, key, Keyword.get(env, key, default)) end
 
     state = %__MODULE__{
-      ctl: get.(:ctl_module, Ctl),
+      cec: get.(:cec_module, BodgeCEC),
       enumerate: Keyword.get(opts, :enumerate, &Enumerate.list/0),
       output_lookup: Keyword.get(opts, :output_lookup, &UniversalProxy.Audio.get_output/1),
-      osd_name: get.(:osd_name, "Universal Proxy"),
+      osd_name: osd_name(get.(:osd_name, "UniversalProxy")),
       auto_wake: get.(:auto_wake, true),
       receiver_la: get.(:receiver_la, 5),
       scan_ms: get.(:scan_interval_ms, @default_scan_ms),
-      monitor?: Keyword.get(opts, :monitor?, true),
-      monitor_binary: Keyword.get(opts, :monitor_binary),
       pubsub: Keyword.get(opts, :pubsub, @pubsub),
       task_sup: Keyword.get(opts, :task_supervisor, UniversalProxy.TaskSupervisor)
     }
 
     Phoenix.PubSub.subscribe(state.pubsub, @audio_topic)
-    Phoenix.PubSub.subscribe(state.pubsub, Monitor.topic())
     send(self(), :scan)
     {:ok, state}
   end
@@ -162,11 +173,17 @@ defmodule UniversalProxy.Cec.Server do
       with {:ok, %{card_index: card}} <- state.output_lookup.(key),
            {:ok, adapter} <- find_by_card(state, card) do
         Logger.info("CEC: stream starting on card #{card}; One Touch Play via #{adapter.dev}")
-        ctl = state.ctl
+        cec = state.cec
         la = state.receiver_la
 
         Task.Supervisor.start_child(state.task_sup, fn ->
-          UniversalProxy.Cec.one_touch_play(adapter, ctl: ctl, receiver_la: la)
+          case UniversalProxy.Cec.one_touch_play(adapter, cec: cec, receiver_la: la) do
+            :ok ->
+              Logger.info("CEC: One Touch Play via #{adapter.dev} delivered")
+
+            {:error, reason} ->
+              Logger.warning("CEC: One Touch Play via #{adapter.dev} failed: #{inspect(reason)}")
+          end
         end)
       end
     end
@@ -176,15 +193,17 @@ defmodule UniversalProxy.Cec.Server do
 
   def handle_info({:sendspin_state, _key, _event}, state), do: {:noreply, state}
 
-  def handle_info({:cec_event, dev, %{type: :event, kind: :state_change, phys_addr: pa}}, state) do
-    {:noreply, update_adapter(state, dev, &%{&1 | phys_addr: pa})}
-  end
+  # An adapter process reporting; it is known by what it registered as.
+  def handle_info({:bodge_cec, pid, event}, state) do
+    case Registry.keys(@registry, pid) do
+      [dev] ->
+        Phoenix.PubSub.broadcast(state.pubsub, @topic, {:cec_event, dev, event})
+        {:noreply, apply_event(state, dev, event)}
 
-  def handle_info({:cec_event, dev, %{type: :message, direction: :received} = msg}, state) do
-    {:noreply, apply_message(state, dev, msg)}
+      _ ->
+        {:noreply, state}
+    end
   end
-
-  def handle_info({:cec_event, _dev, _record}, state), do: {:noreply, state}
 
   def handle_info(_other, state), do: {:noreply, state}
 
@@ -200,8 +219,10 @@ defmodule UniversalProxy.Cec.Server do
     Enum.reduce(present, state, fn {dev, info}, acc ->
       case Map.fetch(acc.adapters, dev) do
         {:ok, existing} ->
-          # Keep what we learned; refresh the sysfs-derived pairing.
-          put_adapter(acc, %{
+          # Keep what we learned; refresh the sysfs-derived pairing, and
+          # reopen an adapter whose process is not running (a failed open
+          # last time, or one that stopped on its own).
+          ensure_running(acc, %{
             existing
             | hdmi_device: info.hdmi_device,
               card_index: info.card_index
@@ -223,81 +244,97 @@ defmodule UniversalProxy.Cec.Server do
 
   defp add_adapter(state, info) do
     adapter =
-      info
-      |> Map.merge(%{
+      Map.merge(info, %{
         phys_addr: nil,
         logical_address: nil,
         claimed?: false,
         receiver: %{power: :unknown, volume: nil, muted: nil, updated_at: nil}
       })
-      |> claim(state)
 
-    state = put_adapter(state, adapter)
-    if state.monitor?, do: start_monitor(state, adapter.dev), else: state
+    start_adapter(state, adapter)
   end
 
-  defp claim(adapter, state) do
+  defp ensure_running(state, adapter) do
+    case Registry.lookup(@registry, adapter.dev) do
+      [] -> start_adapter(state, adapter)
+      _ -> put_adapter(state, adapter)
+    end
+  end
+
+  defp start_adapter(state, adapter) do
     dev = adapter.dev
 
-    claimed? =
-      case state.ctl.run(Ctl.claim_playback_args(dev, state.osd_name), []) do
-        {:ok, _} ->
-          true
+    case DynamicSupervisor.start_child(@adapter_supervisor, adapter_spec(state, dev)) do
+      {:ok, pid} ->
+        put_adapter(state, learn_addresses(state, adapter, pid))
 
-        {:error, reason} ->
-          Logger.warning("CEC: claiming a playback address on #{dev} failed: #{inspect(reason)}")
-          false
-      end
+      {:error, {:already_started, pid}} ->
+        put_adapter(state, learn_addresses(state, adapter, pid))
 
-    info =
-      case state.ctl.run(Ctl.driver_info_args(dev), []) do
-        {:ok, out} -> Parser.driver_info(out)
-        {:error, _} -> %{phys_addr: nil, logical_address: nil}
-      end
+      {:error, reason} ->
+        Logger.warning(
+          "CEC: opening #{dev} failed: #{inspect(reason)}; retrying on the next scan"
+        )
+
+        put_adapter(state, adapter)
+    end
+  end
+
+  # The adapter's claim completes asynchronously and arrives as a
+  # `:state_change` event too; reading the snapshot now just makes the record
+  # complete as soon as discovery returns.
+  defp learn_addresses(state, adapter, pid) do
+    %{phys_addr: pa, log_addrs: las} = state.cec.info(pid)
+    adapter = with_addresses(adapter, pa, las)
 
     Logger.info(
-      "CEC: #{dev} (#{adapter.hdmi_device || "?"}, card #{inspect(adapter.card_index)}) " <>
-        "phys #{inspect(info.phys_addr)} logical #{inspect(info.logical_address)}"
+      "CEC: #{adapter.dev} (#{adapter.hdmi_device || "?"}, card #{inspect(adapter.card_index)}) " <>
+        "phys #{inspect(adapter.phys_addr)} logical #{inspect(adapter.logical_address)}"
     )
 
+    adapter
+  catch
+    :exit, _ -> adapter
+  end
+
+  defp with_addresses(adapter, pa, log_addrs) do
     %{
       adapter
-      | claimed?: claimed?,
-        phys_addr: info.phys_addr,
-        logical_address: info.logical_address
+      | phys_addr: PhysicalAddress.to_string(pa),
+        logical_address: List.first(log_addrs),
+        claimed?: log_addrs != []
     }
   end
 
-  defp start_monitor(state, dev) do
-    spec =
-      {Monitor,
-       dev: dev,
-       pubsub: state.pubsub,
-       binary: state.monitor_binary,
-       name: {:via, Registry, {@monitor_registry, dev}}}
+  defp adapter_spec(state, dev) do
+    opts = [
+      device: dev,
+      name: adapter_name(dev),
+      notify: self(),
+      claim: [type: :playback, osd_name: state.osd_name]
+    ]
 
-    case DynamicSupervisor.start_child(@monitor_supervisor, spec) do
-      {:ok, _pid} ->
-        state
-
-      {:error, {:already_started, _pid}} ->
-        state
-
-      {:error, reason} ->
-        Logger.warning("CEC: monitor for #{dev} not started: #{inspect(reason)}")
-        state
-    end
+    # :transient — an adapter that stops normally (the HDMI driver unbound
+    # under it) is not restarted; the scan reopens it when the node is back.
+    %{
+      id: {:cec_adapter, dev},
+      start: {state.cec, :start_link, [opts]},
+      restart: :transient,
+      shutdown: 5_000
+    }
   end
 
   defp remove_adapter(state, dev) do
     Logger.info("CEC: #{dev} gone")
-    if state.monitor?, do: stop_monitor(dev)
+    stop_adapter(dev)
     %{state | adapters: Map.delete(state.adapters, dev)}
   end
 
-  defp stop_monitor(dev) do
-    case Registry.lookup(@monitor_registry, dev) do
-      [{pid, _}] -> _ = DynamicSupervisor.terminate_child(@monitor_supervisor, pid)
+  # A graceful stop: the adapter releases the fd and its follower role in
+  # terminate/2 (BodgeCEC must not be brutal-killed).
+  defp stop_adapter(dev) do
+    case Registry.lookup(@registry, dev) do
+      [{pid, _}] -> _ = DynamicSupervisor.terminate_child(@adapter_supervisor, pid)
       [] -> :ok
     end
 
@@ -307,33 +344,67 @@ defmodule UniversalProxy.Cec.Server do
     ArgumentError -> :ok
   end
 
+  defp osd_name(name) when is_binary(name) and byte_size(name) <= @osd_name_max, do: name
+
+  defp osd_name(name) when is_binary(name) do
+    short = binary_part(name, 0, @osd_name_max)
+
+    Logger.warning(
+      "CEC: OSD name #{inspect(name)} is over #{@osd_name_max} bytes; using #{inspect(short)}"
+    )
+
+    short
+  end
+
   # ── state updates ─────────────────────────────────────────────────────
+
+  defp apply_event(state, dev, {:state_change, %{phys_addr: pa, log_addrs: las}}) do
+    update_adapter(state, dev, fn adapter ->
+      updated = with_addresses(adapter, pa, las)
+
+      if Map.take(updated, [:phys_addr, :logical_address]) !=
+           Map.take(adapter, [:phys_addr, :logical_address]),
+         do:
+           Logger.info(
+             "CEC: #{dev} phys #{inspect(updated.phys_addr)} logical #{inspect(updated.logical_address)}"
+           )
+
+      updated
+    end)
+  end
+
+  defp apply_event(state, dev, {:message, from, to, message}),
+    do: apply_message(state, dev, from, to, message)
+
+  defp apply_event(state, _dev, _event), do: state
 
   # Status reports only describe the receiver when the receiver sent them
   # (a TV answering a power query reports its own state).
-  defp apply_message(
-         %{receiver_la: la} = state,
-         dev,
-         %{opcode: "REPORT_POWER_STATUS", from: la} = msg
-       ),
-       do: update_receiver(state, dev, %{power: Parser.power_state(msg)})
+  defp apply_message(%{receiver_la: la} = state, dev, la, _to, {:report_power_status, status}),
+    do: update_receiver(state, dev, %{power: UniversalProxy.Cec.power_from_report(status)})
 
   defp apply_message(
          %{receiver_la: la} = state,
          dev,
-         %{opcode: "REPORT_AUDIO_STATUS", from: la} = msg
+         la,
+         _to,
+         {:report_audio_status, muted, vol}
        ),
-       do: update_receiver(state, dev, Parser.audio_status(msg))
+       do:
+         update_receiver(state, dev, %{
+           muted: muted,
+           volume: UniversalProxy.Cec.volume_from_report(vol)
+         })
 
   # A broadcast Standby puts every device on the bus into standby; a directed
   # one only counts when it comes from the receiver.
-  defp apply_message(state, dev, %{opcode: "STANDBY", to: :all}),
+  defp apply_message(state, dev, _from, 15, :standby),
     do: update_receiver(state, dev, %{power: :standby})
 
-  defp apply_message(%{receiver_la: la} = state, dev, %{opcode: "STANDBY", from: la}),
+  defp apply_message(%{receiver_la: la} = state, dev, la, _to, :standby),
     do: update_receiver(state, dev, %{power: :standby})
 
-  defp apply_message(state, _dev, _msg), do: state
+  defp apply_message(state, _dev, _from, _to, _message), do: state
 
   defp update_receiver(state, dev, partial) do
     update_adapter(state, dev, fn adapter ->

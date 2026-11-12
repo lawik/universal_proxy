@@ -76,12 +76,13 @@ config :logger, :console,
 # of this file so it overrides the configuration defined above.
 # HDMI-CEC control of the AV receiver / TV on a Pi's HDMI link (see
 # `UniversalProxy.Cec`). Off here; config/target.exs turns it on for firmware.
-# `:ctl_module` is the cec-ctl runner (tests inject a fake), `:receiver_la`
+# `:cec_module` is the adapter implementation (BodgeCEC; tests inject a fake),
+# `:osd_name` what other devices show us as (14 bytes at most), `:receiver_la`
 # the CEC logical address commands go to (5 = Audio System, i.e. the AVR).
 config :universal_proxy, UniversalProxy.Cec,
   enabled: false,
-  ctl_module: UniversalProxy.Cec.Ctl,
-  osd_name: "Universal Proxy",
+  cec_module: BodgeCEC,
+  osd_name: "UniversalProxy",
   auto_wake: true,
   receiver_la: 5,
   scan_interval_ms: 10_000
