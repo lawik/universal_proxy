@@ -82,10 +82,11 @@ defmodule UniversalProxyWeb.OverviewLiveTest do
        ]}
     )
 
-    # Both the owner column and the status badge ("Idle" otherwise: the
-    # proxy stack never claims the mesh radio).
+    # The owner column, its phone-only twin under the adapter name (the
+    # column is hidden below `md`), and the status badge ("Idle" otherwise:
+    # the proxy stack never claims the mesh radio).
     html = render(view)
-    assert length(String.split(html, "Tuya mesh")) - 1 == 2
+    assert length(String.split(html, "Tuya mesh")) - 1 == 3
   end
 
   test "Overview omits the audio card when no outputs are present", %{conn: conn} do

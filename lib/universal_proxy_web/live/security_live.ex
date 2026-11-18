@@ -190,13 +190,13 @@ defmodule UniversalProxyWeb.SecurityLive do
             Paste into <span class="font-mono">api: encryption: key:</span>
             in your Home Assistant config.
           </div>
-          <div class="flex gap-2">
+          <div class="flex gap-2 flex-wrap">
             <input
               id="psk-input"
               type={if @show_key, do: "text", else: "password"}
               readonly
               value={Base.encode64(@psk)}
-              class="flex-1 h-9 px-3 rounded-md text-xs font-mono outline-none bg-sunken text-fg-2 border border-border-strong"
+              class="flex-1 min-w-0 basis-full sm:basis-0 h-9 px-3 rounded-md text-xs font-mono outline-none bg-sunken text-fg-2 border border-border-strong"
             />
             <.button variant={:secondary} size={:sm} phx-click="toggle_show_key">
               {if @show_key, do: "Hide", else: "Show"}
@@ -217,7 +217,7 @@ defmodule UniversalProxyWeb.SecurityLive do
             </.button>
           </div>
 
-          <div class="mt-4 pt-4 border-t border-border-2 flex items-start gap-3">
+          <div class="mt-4 pt-4 border-t border-border-2 flex items-start gap-3 flex-wrap">
             <div class="flex-1">
               <div class="text-[13px] font-semibold text-fg-1">Reset encryption</div>
               <div class="text-sm text-fg-3 mt-0.5">
@@ -261,13 +261,13 @@ defmodule UniversalProxyWeb.SecurityLive do
         <div class="text-sm text-fg-3 mt-0.5 mb-2">
           Verify this matches the key you download before you trust the connection.
         </div>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap">
           <input
             id="ssh-fingerprint"
             type="text"
             readonly
             value={@ssh_fingerprint || "unavailable — key service restarting"}
-            class="flex-1 h-9 px-3 rounded-md text-xs font-mono outline-none bg-sunken text-fg-2 border border-border-strong"
+            class="flex-1 min-w-0 basis-full sm:basis-0 h-9 px-3 rounded-md text-xs font-mono outline-none bg-sunken text-fg-2 border border-border-strong"
           />
           <.button
             variant={:secondary}

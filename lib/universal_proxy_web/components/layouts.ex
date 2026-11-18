@@ -18,7 +18,7 @@ defmodule UniversalProxyWeb.Layouts do
     <.link
       navigate={@path}
       class={[
-        "px-3.5 py-3.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+        "flex-none whitespace-nowrap px-3 sm:px-3.5 py-3.5 text-sm font-medium border-b-2 -mb-px transition-colors",
         if(@active,
           do: "text-accent border-accent",
           else: "text-fg-2 border-transparent hover:text-fg-1"
@@ -40,7 +40,7 @@ defmodule UniversalProxyWeb.Layouts do
 
   def flash_group(assigns) do
     ~H"""
-    <div :if={Phoenix.Flash.get(@flash, :info) || Phoenix.Flash.get(@flash, :error)} class="px-6 pt-4">
+    <div :if={Phoenix.Flash.get(@flash, :info) || Phoenix.Flash.get(@flash, :error)} class="px-4 sm:px-6 pt-4">
       <div
         :if={msg = Phoenix.Flash.get(@flash, :info)}
         id="flash-info"

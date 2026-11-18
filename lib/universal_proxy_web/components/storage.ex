@@ -242,7 +242,7 @@ defmodule UniversalProxyWeb.Components.Storage do
     ~H"""
     <div class="fixed inset-0 z-[90] flex justify-end animate-fade">
       <div phx-click="close_drive_drawer" class="absolute inset-0 bg-overlay"></div>
-      <div class="relative w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
+      <div class="relative w-full max-w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
         <%!-- Header --%>
         <div class="px-6 py-5 border-b border-border-1 flex items-start gap-3">
           <div class="w-10 h-10 rounded-md bg-sunken text-fg-2 flex items-center justify-center flex-none">

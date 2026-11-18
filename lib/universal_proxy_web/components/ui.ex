@@ -415,7 +415,10 @@ defmodule UniversalProxyWeb.Components.UI do
 
       <div :if={@open}>
         <div phx-click="close_ha_clients" class="fixed inset-0 z-[90]"></div>
-        <div class="absolute right-0 top-full mt-2 w-[360px] max-h-[70vh] overflow-auto bg-raised border border-border-1 rounded-xl shadow-lg z-[100] animate-pop">
+        <%!-- Phones: pinned under the header edge-to-edge (a 360px panel anchored
+             to the pill would hang off the left of the screen). sm+: the
+             original anchored popover. --%>
+        <div class="fixed left-4 right-4 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[360px] max-h-[70vh] overflow-auto bg-raised border border-border-1 rounded-xl shadow-lg z-[100] animate-pop">
           <div class="flex items-center gap-2.5 px-3.5 py-3 border-b border-border-2">
             <div class="text-[13px] font-semibold text-fg-1">ESPHome API clients</div>
             <div class="flex-1"></div>
@@ -435,7 +438,7 @@ defmodule UniversalProxyWeb.Components.UI do
               :for={{c, i} <- Enum.with_index(@clients)}
               class={["flex flex-col gap-2 px-3.5 py-3", i > 0 && "border-t border-border-2"]}
             >
-              <div class="flex items-baseline gap-2">
+              <div class="flex items-baseline gap-2 flex-wrap">
                 <div class="text-[13px] font-semibold text-fg-1">{c.name}</div>
                 <div class="text-[11px] text-fg-3">
                   {c.kind}{if c.version, do: " · v#{c.version}"}
@@ -447,7 +450,7 @@ defmodule UniversalProxyWeb.Components.UI do
               </div>
               <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-fg-2">
                 <span class="text-fg-3">Address</span>
-                <span class="font-mono">{c.peer}</span>
+                <span class="font-mono break-all">{c.peer}</span>
                 <span class="text-fg-3">Connected</span>
                 <span>{c.since} · last packet {c.last_seen}</span>
               </div>

@@ -1712,19 +1712,19 @@ defmodule UniversalProxyWeb.OverviewLive do
 
   defp device_summary(assigns) do
     ~H"""
-    <.card padding={:none} class="!p-[18px_22px] grid grid-cols-[auto_1fr] gap-5 items-center">
-      <div class="flex items-center gap-3.5">
-        <div class="w-11 h-11 rounded-md bg-accent-soft text-accent flex items-center justify-center">
+    <.card padding={:none} class="!p-[18px_22px] grid grid-cols-1 md:grid-cols-[auto_1fr] gap-4 md:gap-5 items-center">
+      <div class="flex items-center gap-3.5 min-w-0">
+        <div class="w-11 h-11 rounded-md bg-accent-soft text-accent flex items-center justify-center flex-none">
           <.icon name={:plug} size={22} />
         </div>
-        <div>
-          <div class="text-md font-semibold tracking-tight">{@target.hostname}</div>
-          <div class="text-sm text-fg-3 mt-0.5">
+        <div class="min-w-0">
+          <div class="text-md font-semibold tracking-tight break-words">{@target.hostname}</div>
+          <div class="text-sm text-fg-3 mt-0.5 break-words">
             {@target.hardware} · <span class="font-mono">{@target.ip}</span> · firmware {@target.firmware}
           </div>
         </div>
       </div>
-      <div class="flex gap-7 justify-end pr-2">
+      <div class="flex flex-wrap gap-x-7 gap-y-3 md:justify-end md:pr-2">
         <.summary_stat label="Slots in use" value={@connected} total={@total} tint="text-accent" />
         <.summary_stat label="Active" value={@active} tint="text-success" />
         <.summary_stat label="Idle" value={@idle} tint="text-warning" />
@@ -1741,7 +1741,7 @@ defmodule UniversalProxyWeb.OverviewLive do
 
   defp summary_stat(assigns) do
     ~H"""
-    <div class="text-center">
+    <div class="text-left md:text-center">
       <div class={["text-xl font-semibold tabular-nums leading-tight", @tint]}>
         {@value}<span :if={@total} class="text-fg-3 text-base font-normal">/{@total}</span>
       </div>
@@ -1759,39 +1759,41 @@ defmodule UniversalProxyWeb.OverviewLive do
   attr(:rows, :list, required: true)
   attr(:throughput_snapshots, :map, required: true)
 
+  @th_class "text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-3 md:px-4 py-2.5 border-b border-border-1"
+  @td_class "px-3 md:px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle"
+
   defp hardware_table(assigns) do
+    assigns = assign(assigns, :th_class, @th_class)
+
     ~H"""
     <.card padding={:none} class="overflow-hidden">
       <div class="flex items-center px-4 py-3.5 border-b border-border-1">
         <div class="text-base font-semibold">Connected hardware</div>
       </div>
+      <%!-- Fixed layout, widths on the header cells. Below `md` the Type,
+           "In use by" and Throughput columns are hidden: type picker and
+           claim line move into the Adapter cell, throughput is in the
+           drawer. The column widths must sum to less than a phone screen
+           or the card would push the page sideways. --%>
       <table class="w-full table-fixed border-collapse">
-        <colgroup>
-          <col class="w-[88px]" />
-          <col />
-          <col class="w-[132px]" />
-          <col class="w-[200px]" />
-          <col class="w-[110px]" />
-          <col class="w-[130px]" />
-        </colgroup>
         <thead>
           <tr class="bg-sunken">
-            <th class="text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-4 py-2.5 border-b border-border-1">
+            <th class={["w-[68px] md:w-[88px]", @th_class]}>
               Slot
             </th>
-            <th class="text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-4 py-2.5 border-b border-border-1">
+            <th class={@th_class}>
               Adapter
             </th>
-            <th class="text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-4 py-2.5 border-b border-border-1">
+            <th class={["hidden md:table-cell md:w-[132px]", @th_class]}>
               Type
             </th>
-            <th class="text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-4 py-2.5 border-b border-border-1">
+            <th class={["hidden md:table-cell md:w-[200px]", @th_class]}>
               In use by
             </th>
-            <th class="text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-4 py-2.5 border-b border-border-1">
+            <th class={["hidden md:table-cell md:w-[110px]", @th_class]}>
               Throughput
             </th>
-            <th class="text-left text-xs font-bold uppercase tracking-wide text-fg-1 px-4 py-2.5 border-b border-border-1">
+            <th class={["w-[96px] md:w-[130px]", @th_class]}>
               Status
             </th>
           </tr>
@@ -1861,38 +1863,36 @@ defmodule UniversalProxyWeb.OverviewLive do
       |> assign(:status, MockData.port_status(assigns.port))
       |> assign(:depth, Map.get(assigns.port, :depth, 0))
 
+    assigns = assign(assigns, :td_class, @td_class)
+
     ~H"""
     <tr
       class="cursor-pointer hover:bg-sunken last:[&_td]:border-b-0"
       phx-click="select_port"
       phx-value-id={@port.id}
     >
-      <td class={["px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle", @depth > 0 && "pl-10"]}>
+      <td class={[@td_class, @depth > 0 && "pl-6 md:pl-10"]}>
         <div class="text-xs font-semibold text-fg-2 tracking-wide">
           <span :if={@depth > 0} class="text-fg-4 mr-1">└</span>{@port.slot}
         </div>
-        <div class="font-mono text-[11px] text-fg-3 mt-0.5">{@port.slot_sub}</div>
+        <div class="font-mono text-[11px] text-fg-3 mt-0.5 break-all">{@port.slot_sub}</div>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={@td_class}>
         <.adapter_cell port={@port} />
+        <%!-- Phone-only: the Type picker and claim line, since their
+             columns are hidden below md. --%>
+        <div :if={@port.connected} class="md:hidden mt-2 space-y-1">
+          <.type_cell port={@port} />
+          <.port_user port={@port} class="text-sm" />
+        </div>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={["hidden md:table-cell", @td_class]}>
         <.type_cell port={@port} />
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
-        <a
-          :if={@port.user}
-          href={@port.user_href}
-          phx-click="ignore"
-          class="text-accent text-base no-underline"
-        >
-          {@port.user}
-        </a>
-        <span :if={!@port.user} class="text-fg-3 text-base">
-          {if @port.connected, do: "Not claimed", else: "—"}
-        </span>
+      <td class={["hidden md:table-cell", @td_class]}>
+        <.port_user port={@port} class="text-base" />
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={["hidden md:table-cell", @td_class]}>
         <.live_component
           :if={@port.connected and @port.configured}
           module={PortSparkline}
@@ -1901,14 +1901,33 @@ defmodule UniversalProxyWeb.OverviewLive do
           variant={:compact}
           initial_samples={@throughput_snapshots[@port.ha_name]}
         />
-        <span :if={!(@port.connected and @port.configured)} class="text-fg-4 text-base">
-          —
-        </span>
+        <span :if={!(@port.connected and @port.configured)} class="text-fg-4 text-base">—</span>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={@td_class}>
         <.badge variant={@status.variant} dot>{@status.label}</.badge>
       </td>
     </tr>
+    """
+  end
+
+  # "In use by" — the claiming client as a link, or the unclaimed state.
+  # Rendered in its own column from md up and under the adapter on phones.
+  attr(:port, :map, required: true)
+  attr(:class, :string, default: nil)
+
+  defp port_user(assigns) do
+    ~H"""
+    <a
+      :if={@port.user}
+      href={@port.user_href}
+      phx-click="ignore"
+      class={["text-accent no-underline break-words", @class]}
+    >
+      {@port.user}
+    </a>
+    <span :if={!@port.user} class={["text-fg-3", @class]}>
+      {if @port.connected, do: "Not claimed", else: "—"}
+    </span>
     """
   end
 
@@ -1978,56 +1997,76 @@ defmodule UniversalProxyWeb.OverviewLive do
   attr(:p, :map, required: true)
 
   defp peripheral_cells(assigns) do
-    assigns = assign(assigns, :depth, Map.get(assigns.p, :depth, 0))
+    assigns =
+      assigns
+      |> assign(:depth, Map.get(assigns.p, :depth, 0))
+      |> assign(:td_class, @td_class)
 
     ~H"""
-    <td class={["px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle", @depth > 0 && "pl-10"]}>
+    <td class={[@td_class, @depth > 0 && "pl-6 md:pl-10"]}>
       <div class="text-xs font-semibold text-fg-2 tracking-wide">
         <span :if={@depth > 0} class="text-fg-4 mr-1">└</span>{@p.slot}
       </div>
-      <div class="font-mono text-[11px] text-fg-3 mt-0.5">{@p.sub}</div>
+      <div class="font-mono text-[11px] text-fg-3 mt-0.5 break-all">{@p.sub}</div>
     </td>
-    <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+    <td class={@td_class}>
       <div class="flex items-center gap-3">
         <div class={["w-8 h-8 rounded-sm flex items-center justify-center flex-none", @p.soft_class]}>
           <.port_glyph kind={@p.kind} size={18} />
         </div>
         <div class="min-w-0">
           <div class="text-base font-medium text-fg-1 truncate">{@p.name}</div>
-          <div class="text-sm text-fg-3 mt-px">{@p.detail}</div>
+          <div class="text-sm text-fg-3 mt-px break-words">{@p.detail}</div>
+          <%!-- Phone-only: type and claim, whose columns are hidden below md. --%>
+          <div class="md:hidden mt-1.5 space-y-1">
+            <div class="flex items-center gap-2">
+              <span class={["w-1.5 h-1.5 rounded-full flex-none", @p.dot_class]}></span>
+              <span class="text-sm text-fg-1">{@p.type_label}</span>
+            </div>
+            <.peripheral_managed_by p={@p} class="text-sm" />
+          </div>
         </div>
       </div>
     </td>
-    <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+    <td class={["hidden md:table-cell", @td_class]}>
       <div class="flex items-center gap-2">
         <span class={["w-1.5 h-1.5 rounded-full flex-none", @p.dot_class]}></span>
         <span class="text-sm text-fg-1">{@p.type_label}</span>
       </div>
     </td>
-    <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
-      <%!-- A storage row has no managing tab: its claim ("Home Assistant
-           backups" / "Not shared") is state, not a link. --%>
-      <.link
-        :if={@p.tab}
-        navigate={@p.tab}
-        phx-click="ignore"
-        class="text-accent text-base no-underline"
-      >
-        {@p.managed_by}
-      </.link>
-      <span
-        :if={is_nil(@p.tab)}
-        class={["text-base", if(@p[:managed_accent?], do: "text-accent", else: "text-fg-3")]}
-      >
-        {@p.managed_by}
-      </span>
+    <td class={["hidden md:table-cell", @td_class]}>
+      <.peripheral_managed_by p={@p} class="text-base" />
     </td>
-    <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+    <td class={["hidden md:table-cell", @td_class]}>
       <span class="text-fg-4 text-base">—</span>
     </td>
-    <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+    <td class={@td_class}>
       <.badge variant={@p.status.variant} dot>{@p.status.label}</.badge>
     </td>
+    """
+  end
+
+  # A storage row has no managing tab: its claim ("Home Assistant backups" /
+  # "Not shared") is state, not a link.
+  attr(:p, :map, required: true)
+  attr(:class, :string, default: nil)
+
+  defp peripheral_managed_by(assigns) do
+    ~H"""
+    <.link
+      :if={@p.tab}
+      navigate={@p.tab}
+      phx-click="ignore"
+      class={["text-accent no-underline break-words", @class]}
+    >
+      {@p.managed_by}
+    </.link>
+    <span
+      :if={is_nil(@p.tab)}
+      class={[if(@p[:managed_accent?], do: "text-accent", else: "text-fg-3"), @class]}
+    >
+      {@p.managed_by}
+    </span>
     """
   end
 
@@ -2035,13 +2074,15 @@ defmodule UniversalProxyWeb.OverviewLive do
   attr(:hub, :map, required: true)
 
   defp hub_row(assigns) do
+    assigns = assign(assigns, :td_class, @td_class)
+
     ~H"""
     <tr class="last:[&_td]:border-b-0 bg-sunken/30">
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={@td_class}>
         <div class="text-xs font-semibold text-fg-2 tracking-wide">{@hub.slot}</div>
-        <div class="font-mono text-[11px] text-fg-3 mt-0.5">{@hub.slot_sub}</div>
+        <div class="font-mono text-[11px] text-fg-3 mt-0.5 break-all">{@hub.slot_sub}</div>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={@td_class}>
         <div class="flex items-center gap-3">
           <div class="w-8 h-8 rounded-sm bg-sunken flex items-center justify-center flex-none text-fg-3">
             <.icon name={:plug} size={18} />
@@ -2052,16 +2093,16 @@ defmodule UniversalProxyWeb.OverviewLive do
           </div>
         </div>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={["hidden md:table-cell", @td_class]}>
         <span class="text-sm text-fg-1">USB hub</span>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={["hidden md:table-cell", @td_class]}>
         <span class="text-fg-3 text-base">—</span>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={["hidden md:table-cell", @td_class]}>
         <span class="text-fg-4 text-base">—</span>
       </td>
-      <td class="px-4 py-4 text-sm text-fg-1 border-b border-border-2 align-middle">
+      <td class={@td_class}>
         <.badge variant={:neutral} dot>Hub</.badge>
       </td>
     </tr>
@@ -2090,7 +2131,7 @@ defmodule UniversalProxyWeb.OverviewLive do
     ~H"""
     <div class="fixed inset-0 z-[90] flex justify-end animate-fade">
       <div phx-click="close_fma120_drawer" class="absolute inset-0 bg-overlay"></div>
-      <div class="relative w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
+      <div class="relative w-full max-w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
         <%!-- Header --%>
         <div class="px-6 py-5 border-b border-border-1 flex items-start gap-3">
           <div class="w-10 h-10 rounded-md bg-audio-soft text-audio flex items-center justify-center">
@@ -2352,7 +2393,7 @@ defmodule UniversalProxyWeb.OverviewLive do
     ~H"""
     <div class="fixed inset-0 z-[90] flex justify-end animate-fade">
       <div phx-click="close_btd700_drawer" class="absolute inset-0 bg-overlay"></div>
-      <div class="relative w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
+      <div class="relative w-full max-w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
         <%!-- Header --%>
         <div class="px-6 py-5 border-b border-border-1 flex items-start gap-3">
           <div class="w-10 h-10 rounded-md bg-accent-soft text-accent flex items-center justify-center">
@@ -2683,17 +2724,17 @@ defmodule UniversalProxyWeb.OverviewLive do
         </span>
       </div>
       <div class="min-w-0">
-        <div class="flex items-center gap-2">
-          <span class="text-base font-medium text-fg-1">{@port.name}</span>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-base font-medium text-fg-1 break-words">{@port.name}</span>
           <.detection_badge port={@port} />
         </div>
-        <div class="text-sm text-fg-3 mt-px">{@port.vendor} · {@port.chip}</div>
+        <div class="text-sm text-fg-3 mt-px break-words">{@port.vendor} · {@port.chip}</div>
         <div
-          class="font-mono text-[11px] text-fg-1 mt-1 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-xs bg-surface border border-border-1"
+          class="font-mono text-[11px] text-fg-1 mt-1 inline-flex max-w-full items-center gap-1.5 px-1.5 py-0.5 rounded-xs bg-surface border border-border-1"
           title="This is how the adapter appears in Home Assistant's serial port picker."
         >
           <span class="font-sans text-fg-2 uppercase tracking-wide text-[9px] font-bold">HA</span>
-          <span class="text-fg-1">{@port.ha_name}</span>
+          <span class="text-fg-1 truncate">{@port.ha_name}</span>
         </div>
       </div>
     </div>
@@ -2805,7 +2846,7 @@ defmodule UniversalProxyWeb.OverviewLive do
       including the X close button.
       --%>
       <div phx-click="close_drawer" class="absolute inset-0 bg-overlay"></div>
-      <div class="relative w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
+      <div class="relative w-full max-w-[440px] bg-raised h-full shadow-lg overflow-auto animate-slide-in flex flex-col">
         <%!-- Header --%>
         <div class="px-6 py-5 border-b border-border-1 flex items-start gap-3">
           <div class={[
@@ -3261,7 +3302,7 @@ defmodule UniversalProxyWeb.OverviewLive do
   defp bt_disconnected_row(assigns) do
     ~H"""
     <li class={[
-      "grid grid-cols-[4px_36px_1fr_220px_110px] items-center min-h-[64px]",
+      "grid grid-cols-[4px_36px_1fr_104px] md:grid-cols-[4px_36px_1fr_220px_110px] items-center min-h-[64px]",
       not @last? && "border-b border-border-2"
     ]}>
       <div class="self-stretch opacity-40" style="background: var(--hs-warning);"></div>
@@ -3280,9 +3321,9 @@ defmodule UniversalProxyWeb.OverviewLive do
         </div>
       </div>
 
-      <div class="px-4 text-[11px] text-fg-3">Not connected</div>
+      <div class="hidden md:block px-4 text-[11px] text-fg-3">Not connected</div>
 
-      <div class="px-4">
+      <div class="px-3 md:px-4">
         <.badge variant={:warning} dot>Disconnected</.badge>
       </div>
     </li>
@@ -3307,7 +3348,7 @@ defmodule UniversalProxyWeb.OverviewLive do
 
     ~H"""
     <li class={[
-      "grid grid-cols-[4px_36px_1fr_220px_110px] items-center min-h-[64px]",
+      "grid grid-cols-[4px_36px_1fr_104px] md:grid-cols-[4px_36px_1fr_220px_110px] items-center min-h-[64px]",
       not @last? && "border-b border-border-2"
     ]}>
       <div
@@ -3327,7 +3368,7 @@ defmodule UniversalProxyWeb.OverviewLive do
       </div>
 
       <div class="px-3 py-2.5 min-w-0">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <span class="text-sm font-medium text-fg-1 truncate">{@out.friendly_name}</span>
           <span
             :if={@streaming?}
@@ -3349,7 +3390,7 @@ defmodule UniversalProxyWeb.OverviewLive do
         </div>
       </div>
 
-      <div class="px-4 flex items-center gap-2.5">
+      <div class="hidden md:flex px-4 items-center gap-2.5">
         <div class="flex-1 h-1 rounded-[2px] bg-sunken relative overflow-hidden">
           <div
             class={[
@@ -3366,7 +3407,7 @@ defmodule UniversalProxyWeb.OverviewLive do
         </div>
       </div>
 
-      <div class="px-4">
+      <div class="px-3 md:px-4">
         <.badge variant={@status.variant} dot>{@status.label}</.badge>
       </div>
     </li>

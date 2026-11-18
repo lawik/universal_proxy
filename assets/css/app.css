@@ -116,6 +116,11 @@
   body {
     background: var(--hs-bg-canvas);
     color: var(--hs-fg-1);
+    /* Last line of defence against sideways page scroll on phones: a
+       stray wide element is clipped rather than widening the page. `clip`
+       (not `hidden`) so the sticky tab strip keeps working — an overflow
+       scroll container on an ancestor would break `position: sticky`. */
+    overflow-x: clip;
     font-feature-settings: "tnum" 1, "cv11" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -134,6 +139,15 @@
   .tabular-nums {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1, "cv11" 1;
+  }
+
+  /* Scrollable strip without a visible scrollbar (the tab bar on phones). */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 
   .eyebrow {

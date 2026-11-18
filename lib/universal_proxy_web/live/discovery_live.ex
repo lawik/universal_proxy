@@ -131,7 +131,7 @@ defmodule UniversalProxyWeb.DiscoveryLive do
             <.text_input name="discovery[friendly]" value={@form.friendly} />
           </.field>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <.field label="Hostname" help="Follows the ESPHome device name.">
               <.text_input name="discovery[hostname]" value={@form.hostname} readonly mono />
             </.field>
@@ -174,17 +174,19 @@ defmodule UniversalProxyWeb.DiscoveryLive do
       <%!-- Discovery preview --%>
       <div class="mt-6">
         <.eyebrow class="mb-2.5">Discovery preview</.eyebrow>
-        <.card class="!p-[18px] flex gap-4 items-center">
+        <.card class="!p-[18px] flex flex-wrap gap-4 items-center">
           <div class="w-12 h-12 rounded-md bg-accent-soft text-accent flex items-center justify-center flex-none">
             <.icon name={:plug} size={26} />
           </div>
           <div class="flex-1 min-w-0">
-            <div class="text-md font-semibold">{@form.friendly}</div>
-            <div class="text-sm text-fg-3 mt-0.5">
+            <div class="text-md font-semibold break-words">{@form.friendly}</div>
+            <div class="text-sm text-fg-3 mt-0.5 break-words">
               <span class="font-mono">{@form.hostname}</span> · {@form.area}
             </div>
           </div>
-          <.button variant={:primary} size={:sm}>Add to Home Assistant</.button>
+          <.button variant={:primary} size={:sm} class="basis-full sm:basis-auto">
+            Add to Home Assistant
+          </.button>
         </.card>
       </div>
 

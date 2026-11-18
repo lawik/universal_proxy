@@ -169,7 +169,7 @@ defmodule UniversalProxyWeb.SystemLive do
     ~H"""
     <div class="max-w-[860px] mx-auto space-y-4">
       <%!-- Firmware + Health --%>
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <.card padding={:lg}>
           <.eyebrow class="mb-2.5">Firmware</.eyebrow>
           <div class="flex items-baseline gap-2.5 flex-wrap">
@@ -315,15 +315,18 @@ defmodule UniversalProxyWeb.SystemLive do
           >
             No log entries yet.
           </div>
-          <div :for={entry <- @sys_log} class="flex gap-3">
-            <span class="text-fg-4 w-[150px] flex-none">{entry.timestamp}</span>
+          <%!-- Phones: timestamp + level on one line, message below it. --%>
+          <div :for={entry <- @sys_log} class="flex flex-wrap sm:flex-nowrap gap-x-3">
+            <span class="text-fg-4 sm:w-[150px] flex-none">{entry.timestamp}</span>
             <span class={[
               "w-14 flex-none font-semibold",
               log_level_class(entry.level)
             ]}>
               {entry.level}
             </span>
-            <span class="text-fg-1 break-all">{entry.message}</span>
+            <span class="text-fg-1 break-all basis-full sm:basis-auto sm:flex-1 min-w-0">
+              {entry.message}
+            </span>
           </div>
         </div>
       </.card>
@@ -331,7 +334,7 @@ defmodule UniversalProxyWeb.SystemLive do
       <%!-- Power --%>
       <.card padding={:lg}>
         <.eyebrow class="mb-2.5">Power</.eyebrow>
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div class="flex items-center gap-3 p-3.5 border border-border-1 rounded-md">
             <div class="flex-1">
               <div class="text-base font-semibold">Reboot</div>

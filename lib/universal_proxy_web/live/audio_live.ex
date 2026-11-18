@@ -690,7 +690,7 @@ defmodule UniversalProxyWeb.AudioLive do
 
       <div
         :if={map_size(@outputs) > 0 or map_size(@reconnecting) > 0}
-        class="grid grid-cols-1 [grid-template-columns:repeat(auto-fit,minmax(420px,1fr))] gap-4"
+        class="grid grid-cols-1 [grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr))] gap-4"
       >
         <.output_card
           :for={{id, output} <- sorted_outputs(@outputs)}
@@ -715,7 +715,7 @@ defmodule UniversalProxyWeb.AudioLive do
 
         <div
           :if={map_size(@inputs) > 0}
-          class="grid grid-cols-1 [grid-template-columns:repeat(auto-fit,minmax(360px,1fr))] gap-4"
+          class="grid grid-cols-1 [grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr))] gap-4"
         >
           <.input_card
             :for={{id, input} <- sorted_inputs(@inputs)}
@@ -1334,16 +1334,18 @@ defmodule UniversalProxyWeb.AudioLive do
         <span></span>
         <span>Client ID</span>
         <span class="font-mono text-fg-2 truncate">{@output.client_id || "—"}</span>
-        <button
-          :if={@output.client_id}
-          type="button"
-          phx-hook="CopyToClipboard"
-          data-clipboard={@output.client_id}
-          id={"copy-client-#{@id}"}
-          class="text-accent text-[11px] cursor-pointer bg-transparent border-none p-0"
-        >
-          Copy
-        </button>
+        <span>
+          <button
+            :if={@output.client_id}
+            type="button"
+            phx-hook="CopyToClipboard"
+            data-clipboard={@output.client_id}
+            id={"copy-client-#{@id}"}
+            class="text-accent text-[11px] cursor-pointer bg-transparent border-none p-0"
+          >
+            Copy
+          </button>
+        </span>
         <span class="self-start">Pairing token</span>
         <span
           :if={match?(%RevealedToken{}, @pairing)}

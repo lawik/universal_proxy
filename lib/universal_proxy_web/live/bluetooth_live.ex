@@ -881,7 +881,7 @@ defmodule UniversalProxyWeb.BluetoothLive do
 
   defp bt_stat(assigns) do
     ~H"""
-    <div class={["p-[14px_22px]", @divider && "border-l border-border-2"]}>
+    <div class={["px-3 py-3.5 sm:p-[14px_22px] min-w-0", @divider && "border-l border-border-2"]}>
       <div class="text-md font-semibold font-mono tabular-nums text-fg-1">{@value}</div>
       <div class="text-[11px] text-fg-3 mt-0.5">{@label}</div>
     </div>
@@ -899,7 +899,7 @@ defmodule UniversalProxyWeb.BluetoothLive do
 
   defp bt_radio_row(assigns) do
     ~H"""
-    <div class="flex items-center gap-3.5 p-[14px_18px] border-b border-border-2 last:border-b-0">
+    <div class="flex flex-wrap items-center gap-3.5 p-[14px_18px] border-b border-border-2 last:border-b-0">
       <%!-- Bus tile, tinted by role --%>
       <div class={[
         "w-9 h-9 rounded-md flex items-center justify-center flex-none",
@@ -933,14 +933,17 @@ defmodule UniversalProxyWeb.BluetoothLive do
       </div>
 
       <%!-- Role selector --%>
-      <.role_seg
-        :if={@radio.address}
-        mac={@radio.address}
-        role={@role}
-        busy={@busy}
-        audio_role_supported={@audio_role_supported}
-        mesh_available={@mesh_available}
-      />
+      <%!-- Phones: the role switch takes its own line, indented past the
+           tile, instead of squeezing the name column to a few characters. --%>
+      <div :if={@radio.address} class="basis-full sm:basis-auto pl-[50px] sm:pl-0 flex">
+        <.role_seg
+          mac={@radio.address}
+          role={@role}
+          busy={@busy}
+          audio_role_supported={@audio_role_supported}
+          mesh_available={@mesh_available}
+        />
+      </div>
     </div>
     """
   end
